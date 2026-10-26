@@ -1,0 +1,6 @@
+# Drivers oficiais da Espressif, baixados automaticamente no primeiro build
+# (ficam em managed_components/, que não vai para o git).
+dependencies:
+  idf: ">=5.3,<6.0"
+  espressif/ds18b20: "0.4.0"
+  espressif/onewire_bus: "1.1.1"
