@@ -56,4 +56,12 @@ dessa pasta sozinho, sem precisar mexer no `CMakeLists.txt` da raiz.
 | 4 | 15 | tacômetro FAN2 (amarelo, pull-up 2 kΩ para 3V3) |
 | 7 | 18 | comando do MOSFET das ventoinhas pequenas (PWM de 50 Hz) |
 | 38 | 11 | barramento 1-Wire dos DS18B20 (DQ, pull-up 4,7 kΩ ou 2 kΩ para 3V3) |
-| 35 | – | LED da placa: pisca = ok, aceso fixo = alguma ventoinha em falha |
+| 35 | – | DATA do DHT11; sinalizacao por LED desativada no firmware |
+
+## DHT11
+
+O componente [ambiente](components/ambiente/README.md) acrescenta temperatura e umidade no terminal a cada ciclo de 2 segundos. DATA usa GPIO 35 por padrao, configuravel em menuconfig > Component config > IKNET - DHT11. O DS18B20 permanece no GPIO 38 e continua controlando a ventoinha.
+
+## Intervalos de leitura
+
+DS18B20 (GPIO 38): 9 bits, passos de 0,5 C, conversao de 100 ms por sensor mais comunicacao e agendamento. DHT11 (GPIO 35): intervalo minimo de 2100 ms, independente do ciclo de 100 ms da aplicacao. O mutex dos sensores permanece ativo; durante a leitura do DHT11 pode haver atraso adicional. Nao ha garantia de periodo exato de 100 ms.

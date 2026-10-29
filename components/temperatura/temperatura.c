@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "temperatura.h"
+#include "sensor_sync.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "onewire_bus.h"
@@ -56,7 +57,8 @@ static void procurar_sensores(void)
 
     onewire_device_t disp;
     int encontrados = 0;
-    while (onewire_device_iter_get_next(iter, &disp) == ESP_OK) {
+    esp_err_t busca;
+    while ((busca = onewire_device_iter_get_next(iter, &disp)) == ESP_OK) {
         encontrados++;
         int i = indice_por_endereco(disp.address);
         if (i >= 0 && s_sens[i].handle) continue;          // já conhecido e ativo
@@ -82,6 +84,12 @@ static void procurar_sensores(void)
         const ds18b20_config_t ds_cfg = {};   // struct vazia no driver 0.4.0
         ds18b20_device_handle_t h = NULL;
         if (ds18b20_new_device_from_enumeration(&disp, &ds_cfg, &h) == ESP_OK) {
+            esp_err_t resolucao = ds18b20_set_resolution(h, DS18B20_RESOLUTION_9B);
+            if (resolucao != ESP_OK) {
+                ESP_LOGW(TAG, "Falha ao configurar 9 bits: %s", esp_err_to_name(resolucao));
+                ds18b20_del_device(h);
+                continue;
+            }
             s_sens[i].handle = h;
             ESP_LOGI(TAG, "%s encontrado, endereço %016llX",
                      s_sens[i].nome, (unsigned long long)disp.address);
@@ -89,6 +97,9 @@ static void procurar_sensores(void)
         // ESP_ERR_NOT_SUPPORTED = outro tipo de dispositivo 1-Wire: ignorado
     }
     onewire_del_device_iter(iter);
+    if (busca != ESP_ERR_NOT_FOUND) {
+        ESP_LOGW(TAG, "Busca DS18B20 GPIO %d: %s", s_cfg.gpio, esp_err_to_name(busca));
+    }
 
     if (encontrados == 0) {
         ESP_LOGW(TAG, "nenhum sensor no barramento; confira DQ, 3V3, GND e o resistor de pull-up");
@@ -124,6 +135,8 @@ static void tarefa_temperatura(void *arg)
     int ciclos = 0;
 
     while (1) {
+        TickType_t inicio = xTaskGetTickCount();
+        sensor_sync_lock();
         // procura sensores que faltam: na partida e a cada nova_busca_ciclos
         bool falta = (s_n == 0);
         for (int i = 0; i < s_n; i++) falta |= (s_sens[i].handle == NULL);
@@ -132,12 +145,7 @@ static void tarefa_temperatura(void *arg)
         }
         ciclos++;
 
-        // uma conversão para todos ao mesmo tempo (~800 ms em 12 bits)
-        bool algum = false;
-        for (int i = 0; i < s_n; i++) algum |= (s_sens[i].handle != NULL);
-        esp_err_t erro = algum ? ds18b20_trigger_temperature_conversion_for_all(s_bus)
-                               : ESP_ERR_NOT_FOUND;
-
+        // Conversao individual: o driver espera 100 ms em 9 bits.
         for (int i = 0; i < s_n; i++) {
             sensor_t *s = &s_sens[i];
             if (!s->handle) {
@@ -145,7 +153,8 @@ static void tarefa_temperatura(void *arg)
                 continue;
             }
             float t = NAN;
-            esp_err_t e = (erro == ESP_OK) ? ds18b20_get_temperature(s->handle, &t) : erro;
+            esp_err_t e = ds18b20_trigger_temperature_conversion(s->handle);
+            if (e == ESP_OK) e = ds18b20_get_temperature(s->handle, &t);
 
             bool ok = e == ESP_OK && isfinite(t) && t >= TEMP_MIN_VALIDA && t <= TEMP_MAX_VALIDA
                       && t != TEMP_POWER_ON;
@@ -163,7 +172,10 @@ static void tarefa_temperatura(void *arg)
             if (voltou) ESP_LOGW(TAG, "%s: leitura recuperada, %.2f C", s->nome, (double)t);
         }
 
-        vTaskDelay(pdMS_TO_TICKS(s_cfg.intervalo_ms > 800 ? s_cfg.intervalo_ms - 800 : 0));
+        sensor_sync_unlock();
+        TickType_t periodo = pdMS_TO_TICKS(s_cfg.intervalo_ms);
+        TickType_t decorrido = xTaskGetTickCount() - inicio;
+        vTaskDelay(decorrido < periodo ? periodo - decorrido : 1);
     }
 }
 
@@ -175,6 +187,7 @@ esp_err_t temp_init(const temp_config_t *cfg)
     ESP_RETURN_ON_FALSE(cfg && cfg->gpio != GPIO_NUM_NC, ESP_ERR_INVALID_ARG, TAG, "gpio");
     ESP_RETURN_ON_FALSE(cfg->n_mapa >= 0 && cfg->n_mapa <= TEMP_MAX_SENSORES,
                         ESP_ERR_INVALID_ARG, TAG, "n_mapa");
+    ESP_RETURN_ON_ERROR(sensor_sync_init(), TAG, "mutex dos sensores");
     s_cfg = *cfg;
     if (s_cfg.nova_busca_ciclos < 1) s_cfg.nova_busca_ciclos = 1;
 

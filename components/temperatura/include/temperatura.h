@@ -44,7 +44,7 @@ typedef struct {
 
 typedef struct {
     gpio_num_t  gpio;                       // fio de dados (DQ) do barramento
-    int         intervalo_ms;               // tempo entre leituras (mínimo ~800 ms)
+    int         intervalo_ms;               // periodo desejado; conversao de 100 ms por sensor em 9 bits
     int         nova_busca_ciclos;          // a cada quantos ciclos procura sensor faltando
 
     float       limite_frio;                // °C

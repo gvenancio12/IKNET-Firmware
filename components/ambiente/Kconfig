@@ -1,0 +1,9 @@
+menu "IKNET - DHT11"
+    config IKNET_DHT11_GPIO
+        int "GPIO de dados do DHT11"
+        range 0 48
+        default 35
+        help
+            Use um GPIO livre que suporte entrada e saida.
+            Nao compartilhar com DS18B20, fans ou perifericos da placa.
+endmenu

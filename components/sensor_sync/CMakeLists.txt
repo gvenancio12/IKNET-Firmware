@@ -1,0 +1,1 @@
+idf_component_register(SRCS "sensor_sync.c" INCLUDE_DIRS "include" REQUIRES freertos esp_common)

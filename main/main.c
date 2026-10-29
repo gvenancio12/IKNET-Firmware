@@ -3,8 +3,7 @@
 //   temperatura > 24 °C  -> potência 100%
 //   temperatura <= 24 °C -> potência 75%
 //   sensor em falha      -> potência 100% (segurança)
-// Indicação do sensor: no console (sensor OK / FALHA SENSOR) e no LED da placa
-// (pisca = sensor OK, aceso fixo = sensor em falha).
+// Indicacao do sensor: no console (sensor OK / FALHA SENSOR).
 //
 // Ligações:
 //   MOSFET: comando na GPIO 7 (pino 18 do J3)
@@ -18,8 +17,9 @@
 #include "driver/ledc.h"
 #include "esp_log.h"
 #include "temperatura.h"
+#include "ambiente.h"
+#include "sdkconfig.h"
 
-#define LED_GPIO          GPIO_NUM_35         // LED da placa: indica o estado do sensor
 #define MOSFET_GPIO       GPIO_NUM_7          // pino 18 do J3 da Heltec
 #define LOGICA_INVERTIDA  1                  // 1 se no seu circuito GPIO em 0 = fan ligada
 #define SENSOR_GPIO       GPIO_NUM_38         // DQ do DS18B20 (pino 11 do J3)
@@ -36,7 +36,8 @@
 #define PWM_CANAL         LEDC_CHANNEL_1
 
 #define PARTIDA_MS        1000                // 100% na partida, para a fan vencer a inércia
-#define CICLO_MS          2000                // o sensor é lido a cada 2 s
+#define CICLO_MS          100
+#define DHT_INTERVALO_MS  2100
 
 static const char *TAG = "app";
 
@@ -75,23 +76,41 @@ static void fan_potencia(int pct)
 
 void app_main(void)
 {
-    gpio_reset_pin(LED_GPIO);
-    gpio_set_direction(LED_GPIO, GPIO_MODE_OUTPUT);
     pwm_init();
+    // Evita que o DHT11 reconfigure pinos utilizados pela aplicacao.
+    ESP_ERROR_CHECK((CONFIG_IKNET_DHT11_GPIO == SENSOR_GPIO ||
+                     CONFIG_IKNET_DHT11_GPIO == MOSFET_GPIO)
+                    ? ESP_ERR_INVALID_ARG : ESP_OK);
+    ESP_LOGI(TAG, "DS18B20: GPIO %d | DHT11: GPIO %d",
+             SENSOR_GPIO, CONFIG_IKNET_DHT11_GPIO);
 
     temp_config_t tcfg = TEMP_CONFIG_PADRAO();
     tcfg.gpio = SENSOR_GPIO;
+    tcfg.intervalo_ms = 100;
+    tcfg.nova_busca_ciclos = 20;
     ESP_ERROR_CHECK(temp_init(&tcfg));
 
     // partida em 100% enquanto o sensor faz a primeira leitura
     fan_potencia(100);
     vTaskDelay(pdMS_TO_TICKS(PARTIDA_MS));
 
+    TickType_t ultima_dht = xTaskGetTickCount();
     int potencia = POTENCIA_ALTA;
-    int led = 0;
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(CICLO_MS));
 
+        if (xTaskGetTickCount() - ultima_dht >= pdMS_TO_TICKS(DHT_INTERVALO_MS)) {
+            ambiente_leitura_t ambiente;
+            esp_err_t erro_dht = ambiente_ler(&ambiente);
+            // Conta a partir do fim para nunca ler antes do intervalo minimo.
+            ultima_dht = xTaskGetTickCount();
+            if (erro_dht == ESP_OK) {
+                ESP_LOGI(TAG, "DHT11: %.1f C | umidade: %.1f %%",
+                         (double)ambiente.temperatura_c, (double)ambiente.umidade_pct);
+            } else {
+                ESP_LOGW(TAG, "DHT11: FALHA DE LEITURA (%s)", esp_err_to_name(erro_dht));
+            }
+        }
         temp_status_t t = { 0 };
         bool valida = temp_count() > 0 && temp_get_status(0, &t) == ESP_OK && t.valida;
 
@@ -105,9 +124,6 @@ void app_main(void)
 
         fan_potencia(potencia);
 
-        // LED: pisca com o sensor OK; aceso fixo com o sensor em falha
-        led = valida ? !led : 1;
-        gpio_set_level(LED_GPIO, led);
 
         if (valida) {
             ESP_LOGI(TAG, "%s: %6.2f C | sensor OK    | potência %3d%%",
